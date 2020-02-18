@@ -5,6 +5,29 @@ const jsonParser 	= bodyParser.json();
 const turf = require('@turf/turf');
 const https = require("https");
 
+
+Number.prototype.toRadians = function() { return this * Math.PI / 180; };
+Number.prototype.toDegrees = function() { return this * 180 / Math.PI; };
+
+
+function _destinationPoint(latlon, distance, bearing, radius=6371e3){
+    const δ = distance / radius; // angular distance in radians
+    const θ = Number(bearing).toRadians();
+
+    const φ1 = latlon.lat.toRadians(), λ1 = latlon.lon.toRadians();
+
+    const sinφ2 = Math.sin(φ1) * Math.cos(δ) + Math.cos(φ1) * Math.sin(δ) * Math.cos(θ);
+    const φ2 = Math.asin(sinφ2);
+    const y = Math.sin(θ) * Math.sin(δ) * Math.cos(φ1);
+    const x = Math.cos(δ) - Math.sin(φ1) * sinφ2;
+    const λ2 = λ1 + Math.atan2(y, x);
+
+    const _lat = φ2.toDegrees();
+    const _lon = λ2.toDegrees();
+
+    return {"lat": _lat, "lon": _lon};	
+}
+
 module.exports = function(app, cors) {
 	var apiRoutes = express.Router();
 
@@ -15,12 +38,15 @@ module.exports = function(app, cors) {
 		const origin = {"latitude": req.params.towerlat, "longitude": req.params.towerlng, "pan": req.params.pan, "tilt": req.params.tilt, "height": req.params.heightm};
 
 		pythonProcess.stdout.on('data', function(data){
+			
 			const target_on_ellipsoid = JSON.parse(data.toString().replace(/\n/g, ""));
 
-			//We are searching a point of intersection with the teraain between the origin (tower) and the target (point on ellipsoid with 0m height)			
+			let dest_point = _destinationPoint({"lat": parseFloat(origin.latitude), "lon": parseFloat(origin.longitude)}, parseFloat(target_on_ellipsoid.distance), parseFloat(req.params.pan) * -1 );
+
+			//We are searching a point of intersection with the terrain between the origin (tower) and the target (point on ellipsoid with 0m height)			
 			let geojson = {"type": "FeatureCollection", "features": []};
 
-			const url = "https://maps.googleapis.com/maps/api/elevation/json?path=" + parseFloat(origin.latitude) + "," + parseFloat(origin.longitude) + "|" + parseFloat(target_on_ellipsoid.latitude) + "," + parseFloat(target_on_ellipsoid.longitude) +"&samples=512&key=AIzaSyCmURugp5QEYHqtSgldW006i6yrDyTOgTw"
+			const url = "https://maps.googleapis.com/maps/api/elevation/json?path=" + parseFloat(origin.latitude) + "," + parseFloat(origin.longitude) + "|" + parseFloat(dest_point.lat) + "," + parseFloat(dest_point.lon) +"&samples=512&key=AIzaSyCmURugp5QEYHqtSgldW006i6yrDyTOgTw"
 
 			https.get(url, resp => {
 			  resp.setEncoding("utf8");
@@ -32,37 +58,49 @@ module.exports = function(app, cors) {
 			    body = JSON.parse(body);
 			    let elevations = body.results;
 
-			    let destination_pt = turf.point([parseFloat(target_on_ellipsoid.longitude), parseFloat(target_on_ellipsoid.latitude)]);
-			    let observer_height = elevations[0].elevation;
-			    let total_distance = turf.distance(turf.point([elevations[0].location.lng, elevations[0].location.lat]), destination_pt, {units: 'kilometers'}) * 1000;
+			    let destination_pt = turf.point([parseFloat(dest_point.lon), parseFloat(dest_point.lat)]);
+			    let total_distance = turf.distance(turf.point([parseFloat(origin.longitude), parseFloat(origin.latitude)]), destination_pt, {units: 'kilometers'}) * 1000;
 			    
-			    let alfa_rad = Math.atan((observer_height / total_distance));
-			    let alfa = alfa_rad * 180 / Math.PI;
+			    let alfa_rad = Math.atan((parseFloat(req.params.heightm)/ total_distance));
+			    let alfa = alfa_rad.toDegrees();
+
+			    console.log("Angle at the destination towards the tower is ", alfa);
 
 			    
+				geojson.features.push({"type": "Feature", "properties": {"name": "Point on the geoid where los pierces geoid surface"}, "geometry": {"type": "Point", "coordinates": [parseFloat(dest_point.lon), parseFloat(dest_point.lat)]}});
+
 
 			    let vertices = [];
 			    let matches = [];
-			    for(var i = 1;i<elevations.length-1;i++){
+			    let matched = false;
+			    for(var i = 0;i<elevations.length;i++){
 			    	let pt1 = turf.point([elevations[i].location.lng, elevations[i].location.lat]);
 					let options = {units: 'kilometers'};
 
 					let distance_from_current_point = turf.distance(pt1, destination_pt, options) * 1000;
 
-					let height_on_losline = Math.tan(alfa_rad) * distance_from_current_point;
+					let alfa_idx = Math.atan((elevations[i].elevation / distance_from_current_point)).toDegrees();
 
-					if(matches.length < 1){
-						let status = (elevations[i].elevation > height_on_losline) ? true : false;
-						if(status){
-							matches.push(status);
-							geojson.features.push({"type": "Feature", "properties": {"name": "The calculated intersection point with terrain"}, "geometry": {"type": "Point", "coordinates": [elevations[i].location.lng, elevations[i].location.lat]}});
+					let status;
+					if(i>0){
+						status = (alfa_idx > alfa) ? false : true;	
+					}
+					else if(i==0)
+					{
+						status = true;
+					}
+
+					if(!matched){
+						if(!status){
+							geojson.features.push({"type": "Feature", "properties": {"name": "Place of intersection with terrain"}, "geometry": {"type": "Point", "coordinates": [elevations[i].location.lng, elevations[i].location.lat]}});
+							matched = true;
 						}
 					}
 
 			    	vertices.push([elevations[i].location.lng, elevations[i].location.lat]);
 			    }
 
-			    geojson.features.push({"type": "Feature", "properties": {"alfa": alfa, "tower_height": Math.tan(alfa_rad) * total_distance}, "geometry": {"type": "LineString", "coordinates": vertices}});
+			    geojson.features.push({"type": "Feature", "properties": {"angle_towards_tower": alfa, "tower_height": Math.tan(alfa_rad) * total_distance}, "geometry": {"type": "LineString", "coordinates": vertices}});
 
 			    res.json(geojson);
 			  });
