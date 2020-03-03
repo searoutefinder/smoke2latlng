@@ -119,6 +119,10 @@ module.exports = function(app, cors) {
 			
 	});
 
+	apiRoutes.get('elevation/:lat/:lng', function(){
+		
+	});
+
 	app.use('/api', apiRoutes);
 
 };
