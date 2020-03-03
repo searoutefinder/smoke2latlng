@@ -4,6 +4,8 @@ const spawn 		= require("child_process").spawn;
 const jsonParser 	= bodyParser.json();
 const turf = require('@turf/turf');
 const https = require("https");
+const db          = require('../services/db');
+const env         = require('../env');
 
 
 Number.prototype.toRadians = function() { return this * Math.PI / 180; };
@@ -28,7 +30,7 @@ function _destinationPoint(latlon, distance, bearing, radius=6371e3){
     return {"lat": _lat, "lon": _lon};	
 }
 
-module.exports = function(app, cors) {
+module.exports = function(app, db, cors) {
 	var apiRoutes = express.Router();
 
 	//-42.568484/-19.350608/689/-82.65/89.01
@@ -119,8 +121,28 @@ module.exports = function(app, cors) {
 			
 	});
 
-	apiRoutes.get('elevation/:lat/:lng', function(){
-		
+	apiRoutes.get('/elevation/:lat/:lng', function(req, res){
+		db.query("SELECT ST_Value(rast, ST_SetSRID(ST_MakePoint($1,$2),4326)) As elevation, ST_AsGeoJson(ST_SetSRID(ST_MakePoint($3,$4),4326)) AS query_point FROM elevationdata WHERE ST_Intersects(ST_SetSRID(ST_MakePoint($3,$4),4326), rast, 1);", 
+			[
+				parseFloat(req.params.lng),
+				parseFloat(req.params.lat),
+				parseFloat(req.params.lng),
+				parseFloat(req.params.lat)				
+			], function(err, result){
+			if(err){
+				console.log(err);
+				return;
+			}
+			let elevationResult = result.rows[0];
+			let response = {};
+			response.status = "success";
+			response.msg = "Successful retrieval of elevation for the queried point";
+			response.data = {
+				"elevation": elevationResult.elevation,
+				"query_point": JSON.parse(elevationResult.query_point)
+			};
+			res.json(response);
+		});
 	});
 
 	app.use('/api', apiRoutes);

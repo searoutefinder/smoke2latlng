@@ -4,6 +4,7 @@ const http              = require('http');
 const port                      = process.env.PORT || 4000;
 const app                       = express();
 const bodyParser        = require('body-parser');
+const db          	= require('./services/db')
 
 app.use(bodyParser());
 
@@ -18,9 +19,15 @@ app.use(function(req, res, next) {
    next();
 });
 
-require('./app/routes.js')(app, cors);
+require('./app/routes.js')(app, db, cors);
 
 app.listen(port);
 
 console.log('Application started on port ' + port);
 
+
+process.on('beforeExit', (code) => {
+    // disconnect the PG client;
+    console.log('debug :: PG Client disconnect')
+    db.disconnect();
+});
