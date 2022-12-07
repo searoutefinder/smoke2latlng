@@ -13,7 +13,7 @@
     "@googlemaps/google-maps-services-js": "^2.0.2",
     "@turf/turf": "^5.1.6",
     "cors": "^2.8.5",
-    "express": "^4.17.1",
+    "express": "^4.18.2",
     "node-pg": "^1.0.1",
     "nodemon": "^1.19.3",
     "pg": "^7.18.2",
